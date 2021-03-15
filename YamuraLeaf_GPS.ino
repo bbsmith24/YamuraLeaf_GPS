@@ -5,7 +5,7 @@
 
    for ESP32 with built in bluetooth module
 */
-#define DEBUG_PRINT
+//#define DEBUG_PRINT
 #define ESP8266_LED 5
 
 #define GPRMC 0
@@ -73,13 +73,12 @@ void setup()
   //Set device in STA mode to begin with
   WiFi.mode(WIFI_STA);
   // This is the mac address of this device
-  //#ifdef DEBUG_PRINT
+  #ifdef DEBUG_PRINT
   Serial.println();
   Serial.print("YamuraLeaf-GPS at ");
   Serial.print("MAC: "); Serial.println(WiFi.macAddress());
-  //#endif
+  #endif
   // Init ESPNow with a fallback logic
-  Serial.println("Begin ESP-NOW initialization");
   InitESPNow();
   //esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
   // Once ESPNow is successfully Init, we will register for Send CB to
@@ -112,19 +111,22 @@ void setup()
   {
       digitalWrite(ESP8266_LED, blinkState); // built in LED
       delay(100);
-      blinkState = blinkState == LOW ? blinkState == HIGH :blinkState == LOW; 
+      blinkState = blinkState == LOW ? blinkState = HIGH :blinkState = LOW; 
   }
 
+  #ifdef DEBUG_PRINT
   Serial.println("Begin bluetooth initialization");
   // connect(address) is fast (upto 10 secs max), connect(name) is slow (upto 30 secs max) as it needs
   // to resolve name to address first, but it allows to connect to different devices with the same name.
   // Set CoreDebugLevel to Info to view devices bluetooth address and device names
   Serial.print("Attempt to connect to "); Serial.println(btName);
-
+  #endif
   SerialBT.begin("ESP32test", true); 
   ConnectToGPS();
   digitalWrite(ESP8266_LED, LOW); // built in LED
+  #ifdef DEBUG_PRINT
   Serial.println();
+  #endif
   curTime = micros();
   lastTime = curTime;
 }
@@ -199,7 +201,7 @@ void loop()
           }
           strcpy(toSend.leafData.gpsLongitude, token);
           break;
-        default:  // anll others
+        default:  // ignore all others
           break;
       }
       token = strtok(NULL,",");
@@ -350,14 +352,14 @@ void InitESPNow() {
   WiFi.disconnect();
   if (esp_now_init() == 0) 
   {
-    //#ifdef DEBUG_PRINT
+    #ifdef DEBUG_PRINT
     Serial.println("ESPNow Init Success");
-    //#endif
+    #endif
   }
   else {
-    //#ifdef DEBUG_PRINT
+    #ifdef DEBUG_PRINT
     Serial.println("ESPNow Init Failed");
-    //#endif
+    #endif
     // Retry InitESPNow, add a counte and then restart?
     // InitESPNow();
     // or Simply Restart
@@ -373,19 +375,25 @@ void ConnectToGPS()
   
   if(btConnected) 
   {
+    #ifdef DEBUG_PRINT
     Serial.println("Connected Succesfully!");
+    #endif
   }
   else 
   {
     while(!SerialBT.connected(10000)) 
     {
+      #ifdef DEBUG_PRINT
       Serial.println("Failed to connect. Make sure remote device is available and in range, then restart app."); 
+      #endif
     }
   }
   // disconnect() may take upto 10 secs max
   if (SerialBT.disconnect()) 
   {
+    #ifdef DEBUG_PRINT
     Serial.println("Disconnected Succesfully!");
+    #endif
   }
   // this would reconnect to the name(will use address, if resolved) or address used with connect(name/address).
   SerialBT.connect();
@@ -419,13 +427,23 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 //
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
+  if(data[0] != 'T')
+  {
+    return;
+  }
+  #ifdef DEBUG_PRINT
   Serial.print("Recv ");Serial.print(data_len);Serial.print(" bytes from: ");
   for(int idx = 0; idx < 6; idx++)
   {
     Serial.print(mac_addr[idx], HEX);Serial.print(":");
   }
+  #endif
   HubTimeStamp hubTimestamp;
   memcpy(&hubTimestamp, data, sizeof(hubTimestamp));
+  #ifndef DEBUG_PRINT
+  timestampAdjust =  micros() - hubTimestamp.timeStamp;
+  #endif
+  #ifdef DEBUG_PRINT
   unsigned long localTs = micros();
   timestampAdjust =  localTs - hubTimestamp.timeStamp;
   Serial.print(" local timestamp ");
@@ -440,4 +458,5 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
   Serial.print (timestampAdjust);
   Serial.print (" ");
   Serial.println (timestampAdjust, HEX);
+  #endif
 }
