@@ -171,7 +171,7 @@ void loop()
     {
       return;
     }
-    toSend.leafData.timeStamp = micros() - timestampAdjust;
+    toSend.leafData.timeStamp = curTime - timestampAdjust;
     while(token != NULL)
     {
       tokenCount++;
