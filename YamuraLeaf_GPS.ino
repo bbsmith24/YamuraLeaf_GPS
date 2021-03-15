@@ -38,6 +38,12 @@ union DataToSend
   uint8_t dataBytes[MESSAGE_LEN];
 } toSend;
 
+struct HubTimeStamp
+{
+  char msgType;
+  unsigned long timeStamp;  // 4 bytes - millis() value of sample
+};
+
 char gpsRecieved[128];
 
 unsigned long disconnectRetryTime = 10000000;
@@ -46,6 +52,7 @@ unsigned long curTime;
 unsigned long targetInterval = 25000;  // (sample at 40Hz)
 unsigned long sampleInterval = 25000;
 unsigned long lastInterval = 0;
+unsigned long timestampAdjust = 0;
 uint8_t hub_addr[] = { 0x7C, 0x9E, 0xBD, 0xF6, 0x45, 0x80};
 
 
@@ -85,13 +92,15 @@ void setup()
   peer->peer_addr[3]= hub_addr[3];
   peer->peer_addr[4]= hub_addr[4];
   peer->peer_addr[5]= hub_addr[5];
- //peer.lmk = NULL;
   peer->channel = 1;
   peer->encrypt = false;
   peer->priv = NULL;
   
   esp_now_add_peer((const esp_now_peer_info_t*)peer);// hub_addr, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
+  // register for receive callback for data send response
   esp_now_register_send_cb(OnDataSent);
+  // register for receive callback to get the received packet
+  esp_now_register_recv_cb(OnDataRecv);
 
   // set last and current sample 
   lastTime = micros();
@@ -162,7 +171,7 @@ void loop()
     {
       return;
     }
-    toSend.leafData.timeStamp = micros();
+    toSend.leafData.timeStamp = micros() - timestampAdjust;
     while(token != NULL)
     {
       tokenCount++;
@@ -279,6 +288,62 @@ void sendData()
   #endif
 }
 //
+// send data
+//
+void requestTimestamp()
+{
+  const uint8_t msgType = 'T';
+  #ifdef DEBUG_PRINT
+  Serial.print("To ");
+  Serial.print(hub_addr[0], HEX);
+  for(int idx = 1; idx < 6; idx++)
+  {
+    Serial.print(":");
+    Serial.print(hub_addr[idx], HEX);
+  }
+  Serial.print(" Type ");
+  Serial.println((char)msgType);
+  #endif
+  uint8_t result = esp_now_send(hub_addr, &msgType, sizeof(msgType));
+  #ifdef DEBUG_PRINT
+  switch(result)
+  {
+    case 0:
+      break;
+    case ESP_ERR_ESPNOW_NOT_INIT:
+      Serial.println("\nESPNOW not initialized Error");
+      break;
+    case ESP_ERR_ESPNOW_ARG:
+      Serial.println("\nInvalid Argument Error");
+      break;
+    case ESP_ERR_ESPNOW_NO_MEM:
+      Serial.println("\nOut of memory Error");
+      break;
+    case ESP_ERR_ESPNOW_FULL:
+      Serial.println("\nPeer list full Error");
+      break;
+    case ESP_ERR_ESPNOW_NOT_FOUND:
+      Serial.println("\nPeer not found Error");
+      break;
+    case ESP_ERR_ESPNOW_INTERNAL:
+      Serial.println("\nInternal Error");
+      break;
+    case ESP_ERR_ESPNOW_EXIST:
+      Serial.println("\nPeer has existed Error");
+      break;
+    case ESP_ERR_ESPNOW_IF:
+      Serial.println("\nInterface error Error");
+      break;
+    default:
+      Serial.print("Other message send error ");
+      Serial.print(result);
+      Serial.print(" error base ");
+      Serial.println(ESP_ERR_ESPNOW_BASE);
+      break;
+  }
+  #endif
+}
+//
 // Init ESP Now with fallback
 //
 void InitESPNow() {
@@ -326,11 +391,16 @@ void ConnectToGPS()
   SerialBT.connect();
 }
 //
-// callback when data is sent from Master to Slave
+// callback when data is sent
 //
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) 
 {
-  if(status != 0)
+  // first good send request timestamp adjustment
+  if((status == 0) && (timestampAdjust == 0))
+  {
+    requestTimestamp();
+  }
+  else if(status != 0)
   {
     char macStr[18];
     #ifdef DEBUG_PRINT
@@ -343,4 +413,31 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
     Serial.println(status);
     #endif
   }
+}
+//
+// callback when data is received
+//
+void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
+{
+  Serial.print("Recv ");Serial.print(data_len);Serial.print(" bytes from: ");
+  for(int idx = 0; idx < 6; idx++)
+  {
+    Serial.print(mac_addr[idx], HEX);Serial.print(":");
+  }
+  HubTimeStamp hubTimestamp;
+  memcpy(&hubTimestamp, data, sizeof(hubTimestamp));
+  unsigned long localTs = micros();
+  timestampAdjust =  localTs - hubTimestamp.timeStamp;
+  Serial.print(" local timestamp ");
+  Serial.print (localTs);
+  Serial.print (" ");
+  Serial.print (localTs,HEX);
+  Serial.print(" HUB timestamp ");
+  Serial.print (hubTimestamp.timeStamp);
+  Serial.print (" ");
+  Serial.print (hubTimestamp.timeStamp, HEX);
+  Serial.print(" adjustment ");
+  Serial.print (timestampAdjust);
+  Serial.print (" ");
+  Serial.println (timestampAdjust, HEX);
 }
