@@ -6,29 +6,22 @@
    for ESP32 with built in bluetooth module
 */
 //#define DEBUG_PRINT
-#define ESP8266_LED 5
+#define TARGET_INTERVAL 50000
 #define TIMESTAMP_REQUEST_INTERVAL 5000000
+#define DISCONNECT_RETRY 10000000 // loss of BT for GPS unit
 
-#define GPRMC 0
-#define GPGGA 1
 
-#ifdef ESP32
-  #include <esp_now.h>
-  #include <WiFi.h>
-#endif
-#ifdef ESP8266
-  #include <ESP8266WiFi.h>
-  #include <espnow.h>
-#endif
+#include <esp_now.h>
+#include <WiFi.h>
 #include "BluetoothSerial.h"
 
 // data package structure
 #define MESSAGE_LEN 50
 struct LeafData
 {
-  char leafType;            //  1 byte  - type, in this case 'G' for GPS
-  unsigned long timeStamp;  //  4 bytes - micros() value of sample
-  char nmeaTime[15];        // 10 bytes of nmea time string in form hhmmss.sss
+  char leafType;              //  1 byte  - type, in this case 'G' for GPS
+  unsigned long timeStamp;    //  4 bytes - micros() value of sample
+  char nmeaTime[15];          // 10 bytes of nmea time string in form hhmmss.sss
   char gpsLatitude[15];       //  9 bytes of nmea latitude in form ddmm.mmmm              
   char gpsLongitude[15];      // 10 bytes of nmea longitude in form dddmm.mmmm              
 };
@@ -42,19 +35,20 @@ union DataToSend
 struct HubTimeStamp
 {
   char msgType;
-  unsigned long timeStamp;  // 4 bytes - millis() value of sample
+  unsigned long timeStamp;  // 4 bytes - micros() value of sample
 };
-
+// character buffer for nmea messages
 char gpsRecieved[128];
 
-unsigned long disconnectRetryTime = 10000000;
 unsigned long lastTime;
 unsigned long curTime;
-unsigned long targetInterval = 25000;  // (sample at 40Hz)
-unsigned long sampleInterval = 25000;
+unsigned long targetInterval = TARGET_INTERVAL;
+unsigned long sampleInterval = TARGET_INTERVAL;
 unsigned long lastInterval = 0;
 unsigned long lastTimestampRequest = 0;
 unsigned long timestampAdjust = 0;
+
+// hub MAC addres
 uint8_t hub_addr[] = { 0x7C, 0x9E, 0xBD, 0xF6, 0x45, 0x80};
 
 
@@ -62,13 +56,14 @@ BluetoothSerial SerialBT;
 String btName = "XGPS160-45E134";
 char *btPin = "1234"; //<- standard pin would be provided by default
 bool btConnected;
+
+#define ESP8266_LED 5
 //
 //
 //
 void setup()
 {
   Serial.begin(115200);
-
   int blinkState = HIGH;
   pinMode(ESP8266_LED, OUTPUT); // built in LED
   
@@ -77,16 +72,14 @@ void setup()
   // This is the mac address of this device
   #ifdef DEBUG_PRINT
   Serial.println();
-  Serial.print("YamuraLeaf-GPS at ");
+  Serial.print("YamuraLeaf GPS at ");
   Serial.print("MAC: "); Serial.println(WiFi.macAddress());
   #endif
   // Init ESPNow with a fallback logic
   InitESPNow();
-  //esp_now_set_self_role(ESP_NOW_ROLE_CONTROLLER);
   // Once ESPNow is successfully Init, we will register for Send CB to
   // get the status of Trasnmitted packet
   esp_now_peer_info *peer = new esp_now_peer_info();
-  
   peer->peer_addr[0]= hub_addr[0];
   peer->peer_addr[1]= hub_addr[1];
   peer->peer_addr[2]= hub_addr[2];
@@ -96,12 +89,11 @@ void setup()
   peer->channel = 1;
   peer->encrypt = false;
   peer->priv = NULL;
-  
   esp_now_add_peer((const esp_now_peer_info_t*)peer);// hub_addr, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
   // register for receive callback for data send response
-  esp_now_register_send_cb(OnDataSent);
-  // register for receive callback to get the received packet
   esp_now_register_recv_cb(OnDataRecv);
+  // send message callback
+  esp_now_register_send_cb(OnDataSent);
 
   // set last and current sample 
   lastTime = micros();
@@ -109,12 +101,6 @@ void setup()
   // leaf type
   toSend.leafData.leafType = 'G';
 
-  for(int cnt = 0; cnt < 30; cnt++)
-  {
-      digitalWrite(ESP8266_LED, blinkState); // built in LED
-      delay(100);
-      blinkState = blinkState == LOW ? blinkState = HIGH :blinkState = LOW; 
-  }
 
   #ifdef DEBUG_PRINT
   Serial.println("Begin bluetooth initialization");
@@ -129,6 +115,12 @@ void setup()
   #ifdef DEBUG_PRINT
   Serial.println();
   #endif
+  for(int cnt = 0; cnt < 30; cnt++)
+  {
+      digitalWrite(ESP8266_LED, blinkState);
+      delay(100);
+      blinkState = blinkState == LOW ? blinkState = HIGH :blinkState = LOW; 
+  }
   curTime = micros();
   lastTime = curTime;
 }
@@ -220,10 +212,10 @@ void loop()
   else
   {
     // 30 seconds since last message recieved, retry
-    if(curTime - lastTime > disconnectRetryTime)
+    if(curTime - lastTime > DISCONNECT_RETRY)
     {
       #ifdef DEBUG_PRINT
-      Serial.print(disconnectRetryTime/1000000); Serial.println(" seconds since last message or reconnect attempt, reattempt GPS connection");
+      Serial.print(DISCONNECT_RETRY/1000000); Serial.println(" seconds since last message or reconnect attempt, reattempt GPS connection");
       #endif
       ConnectToGPS();
       lastTime = curTime;
@@ -247,57 +239,79 @@ void sendData()
   Serial.print(toSend.leafData.leafType);
   Serial.print(" Time ");
   Serial.print(toSend.leafData.timeStamp);
-  Serial.print(" Values nmeaTime ");
-  Serial.print(toSend.leafData.nmeaTime); Serial.print(" lat ");
-  Serial.print(toSend.leafData.gpsLatitude); Serial.print(" long ");
+  Serial.print(" Values GPS nmeaTime ");
+  Serial.print(toSend.leafData.nmeaTime); Serial.print(" LAT ");
+  Serial.print(toSend.leafData.gpsLatitude); Serial.print(" LONG ");
   Serial.print("\n");
   #endif
   uint8_t result = esp_now_send(hub_addr, &toSend.dataBytes[0], sizeof(LeafData));
-  #ifdef DEBUG_PRINT
   switch(result)
   {
     case 0:
+      if(timestampAdjust == 0)
+      {
+        #ifdef DEBUG_PRINT
+        Serial.println("Request timestamp from hub on first succesful send");
+        #endif
+        requestTimestamp();
+      }
       break;
     case ESP_ERR_ESPNOW_NOT_INIT:
+      #ifdef DEBUG_PRINT
       Serial.println("\nESPNOW not initialized Error");
       break;
+      #endif
     case ESP_ERR_ESPNOW_ARG:
+      #ifdef DEBUG_PRINT
       Serial.println("\nInvalid Argument Error");
+      #endif
       break;
     case ESP_ERR_ESPNOW_NO_MEM:
+      #ifdef DEBUG_PRINT
       Serial.println("\nOut of memory Error");
+      #endif
       break;
     case ESP_ERR_ESPNOW_FULL:
+      #ifdef DEBUG_PRINT
       Serial.println("\nPeer list full Error");
+      #endif
       break;
     case ESP_ERR_ESPNOW_NOT_FOUND:
+      #ifdef DEBUG_PRINT
       Serial.println("\nPeer not found Error");
+      #endif
       break;
     case ESP_ERR_ESPNOW_INTERNAL:
+      #ifdef DEBUG_PRINT
       Serial.println("\nInternal Error");
+      #endif
       break;
     case ESP_ERR_ESPNOW_EXIST:
+      #ifdef DEBUG_PRINT
       Serial.println("\nPeer has existed Error");
+      #endif
       break;
     case ESP_ERR_ESPNOW_IF:
+      #ifdef DEBUG_PRINT
       Serial.println("\nInterface error Error");
+      #endif
       break;
     default:
-      Serial.print("Other message send error ");
-      Serial.print(result);
-      Serial.print(" error base ");
-      Serial.println(ESP_ERR_ESPNOW_BASE);
+      #ifdef DEBUG_PRINT
+      Serial.println("requestTimestamp from hub due to send error");
+      #endif
+      requestTimestamp();
       break;
   }
-  #endif
 }
 //
-// send data
+// request timestamp from hub
 //
 void requestTimestamp()
 {
   const uint8_t msgType = 'T';
   #ifdef DEBUG_PRINT
+  Serial.print(micros());
   Serial.print("To ");
   Serial.print(hub_addr[0], HEX);
   for(int idx = 1; idx < 6; idx++)
@@ -315,35 +329,35 @@ void requestTimestamp()
   {
     case 0:
       break;
-    case ESP_ERR_ESPNOW_NOT_INIT:
-      Serial.println("\nESPNOW not initialized Error");
-      break;
-    case ESP_ERR_ESPNOW_ARG:
-      Serial.println("\nInvalid Argument Error");
-      break;
-    case ESP_ERR_ESPNOW_NO_MEM:
-      Serial.println("\nOut of memory Error");
-      break;
-    case ESP_ERR_ESPNOW_FULL:
-      Serial.println("\nPeer list full Error");
-      break;
-    case ESP_ERR_ESPNOW_NOT_FOUND:
-      Serial.println("\nPeer not found Error");
-      break;
-    case ESP_ERR_ESPNOW_INTERNAL:
-      Serial.println("\nInternal Error");
-      break;
-    case ESP_ERR_ESPNOW_EXIST:
-      Serial.println("\nPeer has existed Error");
-      break;
-    case ESP_ERR_ESPNOW_IF:
-      Serial.println("\nInterface error Error");
-      break;
+    //case ESP_ERR_ESPNOW_NOT_INIT:
+    //  Serial.println("\nESPNOW not initialized Error");
+    //  break;
+    //case ESP_ERR_ESPNOW_ARG:
+    //  Serial.println("\nInvalid Argument Error");
+    //  break;
+    //case ESP_ERR_ESPNOW_NO_MEM:
+    //  Serial.println("\nOut of memory Error");
+    //  break;
+    //case ESP_ERR_ESPNOW_FULL:
+    //  Serial.println("\nPeer list full Error");
+    //  break;
+    //case ESP_ERR_ESPNOW_NOT_FOUND:
+    //  Serial.println("\nPeer not found Error");
+    //  break;
+    //case ESP_ERR_ESPNOW_INTERNAL:
+    //  Serial.println("\nInternal Error");
+    //  break;
+    //case ESP_ERR_ESPNOW_EXIST:
+    //  Serial.println("\nPeer has existed Error");
+    //  break;
+    //case ESP_ERR_ESPNOW_IF:
+    //  Serial.println("\nInterface error Error");
+    //  break;
     default:
-      Serial.print("Other message send error ");
-      Serial.print(result);
-      Serial.print(" error base ");
-      Serial.println(ESP_ERR_ESPNOW_BASE);
+      #ifdef DEBUG_PRINT
+      Serial.print("message send error ");
+      Serial.println(result);
+      #endif
       break;
   }
   #endif
@@ -359,13 +373,12 @@ void InitESPNow() {
     Serial.println("ESPNow Init Success");
     #endif
   }
-  else {
+  else 
+{
     #ifdef DEBUG_PRINT
     Serial.println("ESPNow Init Failed");
     #endif
-    // Retry InitESPNow, add a counte and then restart?
-    // InitESPNow();
-    // or Simply Restart
+    // restart
     ESP.restart();
   }
 }
@@ -411,12 +424,16 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
      (timestampAdjust == 0) &&
      (micros() - lastTimestampRequest > TIMESTAMP_REQUEST_INTERVAL))
   {
+    #ifdef DEBUG_PRINT
+    Serial.println("Request timestamp from hub on first succesful send - OnDataSent");
+    #endif
     requestTimestamp();
   }
   else if(status != 0)
   {
-    char macStr[18];
+    timestampAdjust = 0;
     #ifdef DEBUG_PRINT
+    char macStr[18];
     Serial.print("Last Packet Sent to: ");
     for(int idx = 0; idx < 6; idx++)
     {
@@ -462,6 +479,10 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
   Serial.print(" adjustment ");
   Serial.print (timestampAdjust);
   Serial.print (" ");
-  Serial.println (timestampAdjust, HEX);
+  Serial.print (timestampAdjust, HEX);
+  Serial.print(" corrected ");
+  Serial.print (localTs - timestampAdjust);
+  Serial.print (" ");
+  Serial.println(localTs - timestampAdjust, HEX);
   #endif
 }
