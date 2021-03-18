@@ -7,6 +7,7 @@
 */
 //#define DEBUG_PRINT
 #define ESP8266_LED 5
+#define TIMESTAMP_REQUEST_INTERVAL 5000000
 
 #define GPRMC 0
 #define GPGGA 1
@@ -52,6 +53,7 @@ unsigned long curTime;
 unsigned long targetInterval = 25000;  // (sample at 40Hz)
 unsigned long sampleInterval = 25000;
 unsigned long lastInterval = 0;
+unsigned long lastTimestampRequest = 0;
 unsigned long timestampAdjust = 0;
 uint8_t hub_addr[] = { 0x7C, 0x9E, 0xBD, 0xF6, 0x45, 0x80};
 
@@ -306,6 +308,7 @@ void requestTimestamp()
   Serial.print(" Type ");
   Serial.println((char)msgType);
   #endif
+  lastTimestampRequest = micros();
   uint8_t result = esp_now_send(hub_addr, &msgType, sizeof(msgType));
   #ifdef DEBUG_PRINT
   switch(result)
@@ -404,7 +407,9 @@ void ConnectToGPS()
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) 
 {
   // first good send request timestamp adjustment
-  if((status == 0) && (timestampAdjust == 0))
+  if((status == 0) && 
+     (timestampAdjust == 0) &&
+     (micros() - lastTimestampRequest > TIMESTAMP_REQUEST_INTERVAL))
   {
     requestTimestamp();
   }
