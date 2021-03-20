@@ -5,7 +5,7 @@
 
    for ESP32 with built in bluetooth module
 */
-//#define DEBUG_PRINT
+#define DEBUG_PRINT
 #define TARGET_INTERVAL 50000
 #define TIMESTAMP_REQUEST_INTERVAL 5000000
 #define DISCONNECT_RETRY 10000000 // loss of BT for GPS unit
@@ -36,7 +36,13 @@ struct HubTimeStamp
 {
   char msgType;
   unsigned long timeStamp;  // 4 bytes - micros() value of sample
-};
+} hubTimestamp;
+
+union HearbeatToSend
+{
+  HubTimeStamp heartbeat;
+  uint8_t dataBytes[5];
+} heartBeatToSend;
 // character buffer for nmea messages
 char gpsRecieved[128];
 
@@ -47,7 +53,7 @@ unsigned long sampleInterval = TARGET_INTERVAL;
 unsigned long lastInterval = 0;
 unsigned long lastTimestampRequest = 0;
 unsigned long timestampAdjust = 0;
-
+bool startLogging = false;
 // hub MAC addres
 uint8_t hub_addr[] = { 0x7C, 0x9E, 0xBD, 0xF6, 0x45, 0x80};
 
@@ -131,93 +137,108 @@ void setup()
 void loop() 
 {
   curTime = micros();
-  if(SerialBT.available() > 0)
+  if(startLogging)
   {
-    // got a message of some sort
-    lastTime = curTime;
-    String outStr = "";
-    byte inByte;
-    int charIdx = 0;
-    // read available byte(s)
-    while (SerialBT.available()) 
+    if(SerialBT.available() > 0)
     {
-      inByte = SerialBT.read();
-      if(inByte == 10)
+      // got a message of some sort
+      lastTime = curTime;
+      String outStr = "";
+      byte inByte;
+      int charIdx = 0;
+      // read available byte(s)
+      while (SerialBT.available()) 
       {
-        break;
+        inByte = SerialBT.read();
+        if(inByte == 10)
+        {
+          break;
+        }
+        gpsRecieved[charIdx]=(char)inByte;
+        charIdx++;
       }
-      gpsRecieved[charIdx]=(char)inByte;
-      charIdx++;
-    }
-    // here are the interesting messages
-    // $GPRMC - 11 fields
-    //                     A=valid    latitude                longitude
-    //         hhmmss.sss  V=invalid  ddmm.mmmm               dddmm.mmmm      Speed Course  ddmmyy M  CS
-    // $GPRMC, 161229.487, A,         3723.2475,  N,          12158.3416, W,  0.13, 309.62, 120598, , *10
-    // token 1 = type (GPRMC)
-    // token 2 = nmea time
-    // token 4 = latitude
-    // token 6 = longitude
-    char *token = NULL;
-    char buf[256];
-    // get the first token - message type. accept only GPRMC messages
-    token = strtok(gpsRecieved,",");
-    int tokenCount = 0;
-    if(strcmp(token,"$GPRMC") != 0)
-    {
-      return;
-    }
-    toSend.leafData.timeStamp = curTime - timestampAdjust;
-    while(token != NULL)
-    {
-      tokenCount++;
-      switch(tokenCount)
+      // here are the interesting messages
+      // $GPRMC - 11 fields
+      //                     A=valid    latitude                longitude
+      //         hhmmss.sss  V=invalid  ddmm.mmmm               dddmm.mmmm      Speed Course  ddmmyy M  CS
+      // $GPRMC, 161229.487, A,         3723.2475,  N,          12158.3416, W,  0.13, 309.62, 120598, , *10
+      // token 1 = type (GPRMC)
+      // token 2 = nmea time
+      // token 4 = latitude
+      // token 6 = longitude
+      char *token = NULL;
+      char buf[256];
+      // get the first token - message type. accept only GPRMC messages
+      token = strtok(gpsRecieved,",");
+      int tokenCount = 0;
+      if(strcmp(token,"$GPRMC") != 0)
       {
-        case 2:   // nmea time
-          // must be 10 characters in format hhmmss.sss
-          if(strlen(token) != 10)
-          {
-            return;
-          }
-          strcpy(toSend.leafData.nmeaTime, token);
-          break;
-        case 4:   // nmea latitude in format ddmm.mmmmm
-          if(strlen(token) != 10)
-          {
-            return;
-          }
-          strcpy(toSend.leafData.gpsLatitude, token);
-          break;
-        case 6:   // nmea longitude in format dddmm.mmmmm
-          if(strlen(token) != 11)
-          {
-            return;
-          }
-          strcpy(toSend.leafData.gpsLongitude, token);
-          break;
-        default:  // ignore all others
-          break;
+        return;
       }
-      token = strtok(NULL,",");
+      toSend.leafData.timeStamp = curTime - timestampAdjust;
+      while(token != NULL)
+      {
+        tokenCount++;
+        switch(tokenCount)
+        {
+          case 2:   // nmea time
+            // must be 10 characters in format hhmmss.sss
+            if(strlen(token) != 10)
+            {
+              return;
+            }
+            strcpy(toSend.leafData.nmeaTime, token);
+            break;
+          case 4:   // nmea latitude in format ddmm.mmmmm
+            if(strlen(token) != 10)
+            {
+              return;
+            }
+            strcpy(toSend.leafData.gpsLatitude, token);
+            break;
+          case 6:   // nmea longitude in format dddmm.mmmmm
+            if(strlen(token) != 11)
+            {
+              return;
+            }
+            strcpy(toSend.leafData.gpsLongitude, token);
+            break;
+          default:  // ignore all others
+            break;
+        }
+        token = strtok(NULL,",");
+      }
+      // bad data packet
+      if((tokenCount != 11) ||
+         (strcmp(toSend.leafData.nmeaTime, "000000.000") == 0))
+      {
+        return;
+      }
+      sendData();
     }
-    // bad data packet
-    if((tokenCount != 11) ||
-       (strcmp(toSend.leafData.nmeaTime, "000000.000") == 0))
+    // is connection still alive? if not retry
+    else
     {
-      return;
+      // 30 seconds since last message recieved, retry
+      if(curTime - lastTime > DISCONNECT_RETRY)
+      {
+        #ifdef DEBUG_PRINT
+        Serial.print(DISCONNECT_RETRY/1000000); Serial.println(" seconds since last message or reconnect attempt, reattempt GPS connection");
+        #endif
+        ConnectToGPS();
+        lastTime = curTime;
+      }
     }
-    sendData();
   }
-  // is connection still alive? if not retry
+  // not logging - every 10000000 micros (10 sec) send heartbeat
+  // triggers a timestamp send from hub
   else
   {
-    // 30 seconds since last message recieved, retry
-    if(curTime - lastTime > DISCONNECT_RETRY)
+    lastInterval = curTime - lastTime; 
+    if(lastInterval >= 10000000)
     {
-      #ifdef DEBUG_PRINT
-      Serial.print(DISCONNECT_RETRY/1000000); Serial.println(" seconds since last message or reconnect attempt, reattempt GPS connection");
-      #endif
-      ConnectToGPS();
+      heartBeatToSend.heartbeat.timeStamp = micros() - timestampAdjust;
+      SendHeartBeat();
       lastTime = curTime;
     }
   }
@@ -227,6 +248,7 @@ void loop()
 //
 void sendData()
 {
+  uint8_t result = esp_now_send(hub_addr, &toSend.dataBytes[0], sizeof(LeafData));
   #ifdef DEBUG_PRINT
   Serial.print("To ");
   Serial.print(hub_addr[0], HEX);
@@ -243,66 +265,60 @@ void sendData()
   Serial.print(toSend.leafData.nmeaTime); Serial.print(" LAT ");
   Serial.print(toSend.leafData.gpsLatitude); Serial.print(" LONG ");
   Serial.print("\n");
-  #endif
-  uint8_t result = esp_now_send(hub_addr, &toSend.dataBytes[0], sizeof(LeafData));
-  switch(result)
+  if(result != 0)
   {
-    case 0:
-      if(timestampAdjust == 0)
-      {
-        #ifdef DEBUG_PRINT
-        Serial.println("Request timestamp from hub on first succesful send");
-        #endif
-        requestTimestamp();
-      }
-      break;
-    case ESP_ERR_ESPNOW_NOT_INIT:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nESPNOW not initialized Error");
-      break;
-      #endif
-    case ESP_ERR_ESPNOW_ARG:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nInvalid Argument Error");
-      #endif
-      break;
-    case ESP_ERR_ESPNOW_NO_MEM:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nOut of memory Error");
-      #endif
-      break;
-    case ESP_ERR_ESPNOW_FULL:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nPeer list full Error");
-      #endif
-      break;
-    case ESP_ERR_ESPNOW_NOT_FOUND:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nPeer not found Error");
-      #endif
-      break;
-    case ESP_ERR_ESPNOW_INTERNAL:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nInternal Error");
-      #endif
-      break;
-    case ESP_ERR_ESPNOW_EXIST:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nPeer has existed Error");
-      #endif
-      break;
-    case ESP_ERR_ESPNOW_IF:
-      #ifdef DEBUG_PRINT
-      Serial.println("\nInterface error Error");
-      #endif
-      break;
-    default:
-      #ifdef DEBUG_PRINT
-      Serial.println("requestTimestamp from hub due to send error");
-      #endif
-      requestTimestamp();
-      break;
+    Serial.println("send error");
   }
+  #endif
+}
+//
+// send heartbeat
+//
+void SendHeartBeat()
+{
+  // was disconnected from hub, try to reconnect
+  if(!esp_now_is_peer_exist(hub_addr))
+  {
+    #ifdef DEBUG_PRINT
+    Serial.println("Reconnectting");
+    #endif
+      esp_now_peer_info *peer = new esp_now_peer_info();
+      peer->peer_addr[0]= hub_addr[0];
+      peer->peer_addr[1]= hub_addr[1];
+      peer->peer_addr[2]= hub_addr[2];
+      peer->peer_addr[3]= hub_addr[3];
+      peer->peer_addr[4]= hub_addr[4];
+      peer->peer_addr[5]= hub_addr[5];
+      peer->channel = 1;
+      peer->encrypt = false;
+      peer->priv = NULL;
+      esp_now_add_peer((const esp_now_peer_info_t*)peer);
+  }
+  heartBeatToSend.heartbeat.msgType = 'H';
+  heartBeatToSend.heartbeat.timeStamp = micros() - timestampAdjust;;
+  uint8_t result = esp_now_send(hub_addr, &heartBeatToSend.dataBytes[0], sizeof(heartBeatToSend));
+  #ifdef DEBUG_PRINT
+  Serial.print(micros());
+  Serial.print(" To ");
+  Serial.print(hub_addr[0], HEX);
+  for(int idx = 1; idx < 6; idx++)
+  {
+    Serial.print(":");
+    Serial.print(hub_addr[idx], HEX);
+  }
+  Serial.print(" Type ");
+  Serial.print(heartBeatToSend.heartbeat.msgType);
+  Serial.print(" Time ");
+  Serial.print(heartBeatToSend.heartbeat.timeStamp);
+  Serial.print(" bytes ");
+  Serial.print(heartBeatToSend.dataBytes[0], HEX);
+  for(int idx = 1; idx < 5; idx++)
+  {
+    Serial.print(" ");
+    Serial.print(heartBeatToSend.dataBytes[idx], HEX);
+  }
+  Serial.print("\n");
+  #endif
 }
 //
 // request timestamp from hub
@@ -310,6 +326,8 @@ void sendData()
 void requestTimestamp()
 {
   const uint8_t msgType = 'T';
+  lastTimestampRequest = micros();
+  uint8_t result = esp_now_send(hub_addr, &msgType, sizeof(msgType));
   #ifdef DEBUG_PRINT
   Serial.print(micros());
   Serial.print("To ");
@@ -321,44 +339,9 @@ void requestTimestamp()
   }
   Serial.print(" Type ");
   Serial.println((char)msgType);
-  #endif
-  lastTimestampRequest = micros();
-  uint8_t result = esp_now_send(hub_addr, &msgType, sizeof(msgType));
-  #ifdef DEBUG_PRINT
-  switch(result)
+  if(result != 0)
   {
-    case 0:
-      break;
-    //case ESP_ERR_ESPNOW_NOT_INIT:
-    //  Serial.println("\nESPNOW not initialized Error");
-    //  break;
-    //case ESP_ERR_ESPNOW_ARG:
-    //  Serial.println("\nInvalid Argument Error");
-    //  break;
-    //case ESP_ERR_ESPNOW_NO_MEM:
-    //  Serial.println("\nOut of memory Error");
-    //  break;
-    //case ESP_ERR_ESPNOW_FULL:
-    //  Serial.println("\nPeer list full Error");
-    //  break;
-    //case ESP_ERR_ESPNOW_NOT_FOUND:
-    //  Serial.println("\nPeer not found Error");
-    //  break;
-    //case ESP_ERR_ESPNOW_INTERNAL:
-    //  Serial.println("\nInternal Error");
-    //  break;
-    //case ESP_ERR_ESPNOW_EXIST:
-    //  Serial.println("\nPeer has existed Error");
-    //  break;
-    //case ESP_ERR_ESPNOW_IF:
-    //  Serial.println("\nInterface error Error");
-    //  break;
-    default:
-      #ifdef DEBUG_PRINT
-      Serial.print("message send error ");
-      Serial.println(result);
-      #endif
-      break;
+    Serial.print("message send error ");
   }
   #endif
 }
@@ -449,40 +432,34 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
 //
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
-  if(data[0] != 'T')
+  if(data[0] == 'T')
   {
-    return;
+    memcpy(&hubTimestamp, data, sizeof(hubTimestamp));
+    timestampAdjust =  micros() - hubTimestamp.timeStamp;
+    #ifdef DEBUG_PRINT
+    Serial.print("Recv ");Serial.print(data_len);Serial.print(" bytes from: ");
+    for(int idx = 0; idx < 6; idx++)
+    {
+      Serial.print(mac_addr[idx], HEX);Serial.print(":");
+    }
+    unsigned long localTs = micros();
+    Serial.print(" local timestamp ");
+    Serial.print (localTs);
+    Serial.print(" HUB timestamp ");
+    Serial.print (hubTimestamp.timeStamp);
+    Serial.print(" adjustment ");
+    Serial.print (timestampAdjust);
+    Serial.print(" corrected ");
+    Serial.println(localTs - timestampAdjust);
+    #endif
   }
-  #ifdef DEBUG_PRINT
-  Serial.print("Recv ");Serial.print(data_len);Serial.print(" bytes from: ");
-  for(int idx = 0; idx < 6; idx++)
+  // change state of logging
+  else if(data[0] == 'B')
   {
-    Serial.print(mac_addr[idx], HEX);Serial.print(":");
+    startLogging = true;
   }
-  #endif
-  HubTimeStamp hubTimestamp;
-  memcpy(&hubTimestamp, data, sizeof(hubTimestamp));
-  #ifndef DEBUG_PRINT
-  timestampAdjust =  micros() - hubTimestamp.timeStamp;
-  #endif
-  #ifdef DEBUG_PRINT
-  unsigned long localTs = micros();
-  timestampAdjust =  localTs - hubTimestamp.timeStamp;
-  Serial.print(" local timestamp ");
-  Serial.print (localTs);
-  Serial.print (" ");
-  Serial.print (localTs,HEX);
-  Serial.print(" HUB timestamp ");
-  Serial.print (hubTimestamp.timeStamp);
-  Serial.print (" ");
-  Serial.print (hubTimestamp.timeStamp, HEX);
-  Serial.print(" adjustment ");
-  Serial.print (timestampAdjust);
-  Serial.print (" ");
-  Serial.print (timestampAdjust, HEX);
-  Serial.print(" corrected ");
-  Serial.print (localTs - timestampAdjust);
-  Serial.print (" ");
-  Serial.println(localTs - timestampAdjust, HEX);
-  #endif
+  else if(data[0] == 'E')
+  {
+    startLogging = false;
+  }
 }
