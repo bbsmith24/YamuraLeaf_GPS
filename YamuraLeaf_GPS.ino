@@ -14,36 +14,12 @@
 #include <esp_now.h>
 #include <WiFi.h>
 #include "BluetoothSerial.h"
+#include "DataStructures.h"
+// timestamp (H and T types)
+TimeStampPacket timeStamp;
+// digital/A2D data (I type)
+GPSPacket gpsPacket;
 
-// data package structure
-#define MESSAGE_LEN 50
-struct LeafData
-{
-  char leafType;              //  1 byte  - type, in this case 'G' for GPS
-  unsigned long timeStamp;    //  4 bytes - micros() value of sample
-  char nmeaTime[15];          // 10 bytes of nmea time string in form hhmmss.sss
-  char gpsLatitude[15];       //  9 bytes of nmea latitude in form ddmm.mmmm              
-  char gpsLongitude[15];      // 10 bytes of nmea longitude in form dddmm.mmmm              
-};
-// data package union to do conversion to bytes
-union DataToSend
-{
-  struct LeafData leafData;
-  uint8_t dataBytes[MESSAGE_LEN];
-} toSend;
-
-struct HubTimeStamp
-{
-  char msgType;
-  unsigned long timeStamp;  // 4 bytes - micros() value of sample
-} hubTimestamp;
-
-union HearbeatToSend
-{
-  HubTimeStamp heartbeat;
-  uint8_t dataBytes[5];
-} heartBeatToSend;
-// character buffer for nmea messages
 char gpsRecieved[128];
 
 unsigned long lastTime;
@@ -105,7 +81,7 @@ void setup()
   lastTime = micros();
   curTime = micros();
   // leaf type
-  toSend.leafData.leafType = 'G';
+  gpsPacket.packet.leafType[0] = 'G';
 
 
   #ifdef DEBUG_PRINT
@@ -175,7 +151,7 @@ void loop()
       {
         return;
       }
-      toSend.leafData.timeStamp = curTime - timestampAdjust;
+      gpsPacket.packet.timeStamp = curTime - timestampAdjust;
       while(token != NULL)
       {
         tokenCount++;
@@ -187,21 +163,21 @@ void loop()
             {
               return;
             }
-            strcpy(toSend.leafData.nmeaTime, token);
+            strcpy(gpsPacket.packet.nmeaTime, token);
             break;
           case 4:   // nmea latitude in format ddmm.mmmmm
             if(strlen(token) != 10)
             {
               return;
             }
-            strcpy(toSend.leafData.gpsLatitude, token);
+            strcpy(gpsPacket.packet.gpsLatitude, token);
             break;
           case 6:   // nmea longitude in format dddmm.mmmmm
             if(strlen(token) != 11)
             {
               return;
             }
-            strcpy(toSend.leafData.gpsLongitude, token);
+            strcpy(gpsPacket.packet.gpsLongitude, token);
             break;
           default:  // ignore all others
             break;
@@ -210,7 +186,7 @@ void loop()
       }
       // bad data packet
       if((tokenCount != 11) ||
-         (strcmp(toSend.leafData.nmeaTime, "000000.000") == 0))
+         (strcmp(gpsPacket.packet.nmeaTime, "000000.000") == 0))
       {
         return;
       }
@@ -237,7 +213,7 @@ void loop()
     lastInterval = curTime - lastTime; 
     if(lastInterval >= 10000000)
     {
-      heartBeatToSend.heartbeat.timeStamp = micros() - timestampAdjust;
+      //timeStamp.packet.timeStamp = micros() - timestampAdjust;
       SendHeartBeat();
       lastTime = curTime;
     }
@@ -248,7 +224,7 @@ void loop()
 //
 void sendData()
 {
-  uint8_t result = esp_now_send(hub_addr, &toSend.dataBytes[0], sizeof(LeafData));
+  uint8_t result = esp_now_send(hub_addr, &gpsPacket.dataBytes[0], sizeof(gpsPacket));
   #ifdef DEBUG_PRINT
   Serial.print("To ");
   Serial.print(hub_addr[0], HEX);
@@ -258,17 +234,18 @@ void sendData()
     Serial.print(hub_addr[idx], HEX);
   }
   Serial.print(" Type ");
-  Serial.print(toSend.leafData.leafType);
+  Serial.print(gpsPacket.packet.leafType);
   Serial.print(" Time ");
-  Serial.print(toSend.leafData.timeStamp);
+  Serial.print(gpsPacket.packet.timeStamp);
   Serial.print(" Values GPS nmeaTime ");
-  Serial.print(toSend.leafData.nmeaTime); Serial.print(" LAT ");
-  Serial.print(toSend.leafData.gpsLatitude); Serial.print(" LONG ");
-  Serial.print("\n");
+  Serial.print(gpsPacket.packet.nmeaTime); Serial.print(" LAT ");
+  Serial.print(gpsPacket.packet.gpsLatitude); Serial.print(" LONG ");
+  Serial.print(gpsPacket.packet.gpsLongitude);
   if(result != 0)
   {
-    Serial.println("send error");
+    Serial.print("send error");
   }
+  Serial.println();
   #endif
 }
 //
@@ -294,9 +271,9 @@ void SendHeartBeat()
       peer->priv = NULL;
       esp_now_add_peer((const esp_now_peer_info_t*)peer);
   }
-  heartBeatToSend.heartbeat.msgType = 'H';
-  heartBeatToSend.heartbeat.timeStamp = micros() - timestampAdjust;;
-  uint8_t result = esp_now_send(hub_addr, &heartBeatToSend.dataBytes[0], sizeof(heartBeatToSend));
+  timeStamp.packet.msgType[0] = 'H';
+  timeStamp.packet.timeStamp = micros() - timestampAdjust;
+  uint8_t result = esp_now_send(hub_addr, &timeStamp.dataBytes[0], sizeof(timeStamp));
   #ifdef DEBUG_PRINT
   Serial.print(micros());
   Serial.print(" To ");
@@ -307,15 +284,15 @@ void SendHeartBeat()
     Serial.print(hub_addr[idx], HEX);
   }
   Serial.print(" Type ");
-  Serial.print(heartBeatToSend.heartbeat.msgType);
+  Serial.print(timeStamp.packet.msgType);
   Serial.print(" Time ");
-  Serial.print(heartBeatToSend.heartbeat.timeStamp);
+  Serial.print(timeStamp.packet.timeStamp);
   Serial.print(" bytes ");
-  Serial.print(heartBeatToSend.dataBytes[0], HEX);
+  Serial.print(timeStamp.dataBytes[0], HEX);
   for(int idx = 1; idx < 5; idx++)
   {
     Serial.print(" ");
-    Serial.print(heartBeatToSend.dataBytes[idx], HEX);
+    Serial.print(timeStamp.dataBytes[idx], HEX);
   }
   Serial.print("\n");
   #endif
@@ -325,9 +302,10 @@ void SendHeartBeat()
 //
 void requestTimestamp()
 {
-  const uint8_t msgType = 'T';
+  timeStamp.packet.msgType[0] = 'T';
+  timeStamp.packet.timeStamp = micros();
   lastTimestampRequest = micros();
-  uint8_t result = esp_now_send(hub_addr, &msgType, sizeof(msgType));
+  uint8_t result = esp_now_send(hub_addr, &timeStamp.dataBytes[0], sizeof(timeStamp));
   #ifdef DEBUG_PRINT
   Serial.print(micros());
   Serial.print("To ");
@@ -338,7 +316,7 @@ void requestTimestamp()
     Serial.print(hub_addr[idx], HEX);
   }
   Serial.print(" Type ");
-  Serial.println((char)msgType);
+  Serial.println((char)timeStamp.packet.msgType[0]);
   if(result != 0)
   {
     Serial.print("message send error ");
@@ -434,19 +412,21 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
   if(data[0] == 'T')
   {
-    memcpy(&hubTimestamp, data, sizeof(hubTimestamp));
-    timestampAdjust =  micros() - hubTimestamp.timeStamp;
+    memcpy(&timeStamp, data, sizeof(timeStamp));
+    timestampAdjust =  micros() - timeStamp.packet.timeStamp;
     #ifdef DEBUG_PRINT
     Serial.print("Recv ");Serial.print(data_len);Serial.print(" bytes from: ");
-    for(int idx = 0; idx < 6; idx++)
+    Serial.print(mac_addr[0], HEX);
+    for(int idx = 1; idx < 6; idx++)
     {
-      Serial.print(mac_addr[idx], HEX);Serial.print(":");
+      Serial.print(":");
+      Serial.print(mac_addr[idx], HEX);
     }
     unsigned long localTs = micros();
-    Serial.print(" local timestamp ");
+    Serial.print(" LOCAL timestamp ");
     Serial.print (localTs);
     Serial.print(" HUB timestamp ");
-    Serial.print (hubTimestamp.timeStamp);
+    Serial.print (timeStamp.packet.timeStamp);
     Serial.print(" adjustment ");
     Serial.print (timestampAdjust);
     Serial.print(" corrected ");
