@@ -59,3 +59,4 @@ union GPSPacket
 	GPSLeaf packet;
 	uint8_t dataBytes[GPSPACKET_SIZE];
 };
+

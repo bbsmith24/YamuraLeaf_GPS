@@ -5,7 +5,7 @@
 
    for ESP32 with built in bluetooth module
 */
-#define DEBUG_PRINT
+//#define PRINT_DEBUG
 #define TARGET_INTERVAL 50000
 #define TIMESTAMP_REQUEST_INTERVAL 5000000
 #define DISCONNECT_RETRY 10000000 // loss of BT for GPS unit
@@ -22,17 +22,17 @@ GPSPacket gpsPacket;
 
 char gpsRecieved[128];
 
-unsigned long lastTime;
-unsigned long curTime;
+unsigned long lastSampleTime;
+unsigned long currentSampleTime;
 unsigned long targetInterval = TARGET_INTERVAL;
-unsigned long sampleInterval = TARGET_INTERVAL;
-unsigned long lastInterval = 0;
-unsigned long lastTimestampRequest = 0;
+unsigned long lastSampleInterval = 0;
 unsigned long timestampAdjust = 0;
-bool startLogging = false;
+bool isLogging = false;
+unsigned long sentCount = 0;
+unsigned long errorCount = 0;
 // hub MAC addres
 uint8_t hub_addr[] = { 0x7C, 0x9E, 0xBD, 0xF6, 0x45, 0x80};
-
+esp_now_peer_info *hub;
 
 BluetoothSerial SerialBT;
 String btName = "XGPS160-45E134";
@@ -52,39 +52,38 @@ void setup()
   //Set device in STA mode to begin with
   WiFi.mode(WIFI_STA);
   // This is the mac address of this device
-  #ifdef DEBUG_PRINT
   Serial.println();
   Serial.print("YamuraLeaf GPS at ");
   Serial.print("MAC: "); Serial.println(WiFi.macAddress());
-  #endif
   // Init ESPNow with a fallback logic
   InitESPNow();
   // Once ESPNow is successfully Init, we will register for Send CB to
   // get the status of Trasnmitted packet
-  esp_now_peer_info *peer = new esp_now_peer_info();
-  peer->peer_addr[0]= hub_addr[0];
-  peer->peer_addr[1]= hub_addr[1];
-  peer->peer_addr[2]= hub_addr[2];
-  peer->peer_addr[3]= hub_addr[3];
-  peer->peer_addr[4]= hub_addr[4];
-  peer->peer_addr[5]= hub_addr[5];
-  peer->channel = 1;
-  peer->encrypt = false;
-  peer->priv = NULL;
-  esp_now_add_peer((const esp_now_peer_info_t*)peer);// hub_addr, ESP_NOW_ROLE_SLAVE, 1, NULL, 0);
   // register for receive callback for data send response
   esp_now_register_recv_cb(OnDataRecv);
   // send message callback
   esp_now_register_send_cb(OnDataSent);
+  // add hub as a peer
+  hub = new esp_now_peer_info();
+  hub->peer_addr[0]= hub_addr[0];
+  hub->peer_addr[1]= hub_addr[1];
+  hub->peer_addr[2]= hub_addr[2];
+  hub->peer_addr[3]= hub_addr[3];
+  hub->peer_addr[4]= hub_addr[4];
+  hub->peer_addr[5]= hub_addr[5];
+  hub->channel = 1;
+  hub->encrypt = false;
+  hub->priv = NULL;
+  esp_now_add_peer((const esp_now_peer_info_t*)hub);
 
   // set last and current sample 
-  lastTime = micros();
-  curTime = micros();
+  lastSampleTime = micros();
+  currentSampleTime = micros();
   // leaf type
   gpsPacket.packet.leafType[0] = 'G';
 
 
-  #ifdef DEBUG_PRINT
+  #ifdef PRINT_DEBUG
   Serial.println("Begin bluetooth initialization");
   // connect(address) is fast (upto 10 secs max), connect(name) is slow (upto 30 secs max) as it needs
   // to resolve name to address first, but it allows to connect to different devices with the same name.
@@ -94,7 +93,7 @@ void setup()
   SerialBT.begin("ESP32test", true); 
   ConnectToGPS();
   digitalWrite(ESP8266_LED, LOW); // built in LED
-  #ifdef DEBUG_PRINT
+  #ifdef PRINT_DEBUG
   Serial.println();
   #endif
   for(int cnt = 0; cnt < 30; cnt++)
@@ -103,8 +102,9 @@ void setup()
       delay(100);
       blinkState = blinkState == LOW ? blinkState = HIGH :blinkState = LOW; 
   }
-  curTime = micros();
-  lastTime = curTime;
+  currentSampleTime = micros();
+  lastSampleTime = currentSampleTime;
+  Serial.println("Running");
 }
 //
 // read GPS, push data to hub
@@ -112,13 +112,13 @@ void setup()
 //
 void loop() 
 {
-  curTime = micros();
-  if(startLogging)
+  currentSampleTime = micros();
+  if(isLogging)
   {
     if(SerialBT.available() > 0)
     {
       // got a message of some sort
-      lastTime = curTime;
+      lastSampleTime = currentSampleTime;
       String outStr = "";
       byte inByte;
       int charIdx = 0;
@@ -151,7 +151,7 @@ void loop()
       {
         return;
       }
-      gpsPacket.packet.timeStamp = curTime - timestampAdjust;
+      gpsPacket.packet.timeStamp = currentSampleTime - timestampAdjust;
       while(token != NULL)
       {
         tokenCount++;
@@ -196,13 +196,13 @@ void loop()
     else
     {
       // 30 seconds since last message recieved, retry
-      if(curTime - lastTime > DISCONNECT_RETRY)
+      if(currentSampleTime - lastSampleTime > DISCONNECT_RETRY)
       {
-        #ifdef DEBUG_PRINT
+        #ifdef PRINT_DEBUG
         Serial.print(DISCONNECT_RETRY/1000000); Serial.println(" seconds since last message or reconnect attempt, reattempt GPS connection");
         #endif
         ConnectToGPS();
-        lastTime = curTime;
+        lastSampleTime = currentSampleTime;
       }
     }
   }
@@ -210,12 +210,11 @@ void loop()
   // triggers a timestamp send from hub
   else
   {
-    lastInterval = curTime - lastTime; 
-    if(lastInterval >= 10000000)
+    lastSampleInterval = currentSampleTime - lastSampleTime; 
+    if(lastSampleInterval >= 10000000)
     {
-      //timeStamp.packet.timeStamp = micros() - timestampAdjust;
       SendHeartBeat();
-      lastTime = curTime;
+      lastSampleTime = currentSampleTime;
     }
   }
 }
@@ -225,7 +224,8 @@ void loop()
 void sendData()
 {
   uint8_t result = esp_now_send(hub_addr, &gpsPacket.dataBytes[0], sizeof(gpsPacket));
-  #ifdef DEBUG_PRINT
+  sentCount++;
+  #ifdef PRINT_DEBUG
   Serial.print("To ");
   Serial.print(hub_addr[0], HEX);
   for(int idx = 1; idx < 6; idx++)
@@ -240,13 +240,17 @@ void sendData()
   Serial.print(" Values GPS nmeaTime ");
   Serial.print(gpsPacket.packet.nmeaTime); Serial.print(" LAT ");
   Serial.print(gpsPacket.packet.gpsLatitude); Serial.print(" LONG ");
-  Serial.print(gpsPacket.packet.gpsLongitude);
+  Serial.println(gpsPacket.packet.gpsLongitude);
+  #endif
   if(result != 0)
   {
+    errorCount++;
     Serial.print("send error");
+    Serial.print(errorCount);
+    Serial.print(" of ");
+    Serial.print(sentCount);
+    Serial.println(" send attempts");
   }
-  Serial.println();
-  #endif
 }
 //
 // send heartbeat
@@ -256,25 +260,15 @@ void SendHeartBeat()
   // was disconnected from hub, try to reconnect
   if(!esp_now_is_peer_exist(hub_addr))
   {
-    #ifdef DEBUG_PRINT
-    Serial.println("Reconnectting");
+    #ifdef PRINT_DEBUG
+    Serial.println("Reconnecting");
     #endif
-      esp_now_peer_info *peer = new esp_now_peer_info();
-      peer->peer_addr[0]= hub_addr[0];
-      peer->peer_addr[1]= hub_addr[1];
-      peer->peer_addr[2]= hub_addr[2];
-      peer->peer_addr[3]= hub_addr[3];
-      peer->peer_addr[4]= hub_addr[4];
-      peer->peer_addr[5]= hub_addr[5];
-      peer->channel = 1;
-      peer->encrypt = false;
-      peer->priv = NULL;
-      esp_now_add_peer((const esp_now_peer_info_t*)peer);
+    esp_now_add_peer((const esp_now_peer_info_t*)hub);
   }
   timeStamp.packet.msgType[0] = 'H';
   timeStamp.packet.timeStamp = micros() - timestampAdjust;
   uint8_t result = esp_now_send(hub_addr, &timeStamp.dataBytes[0], sizeof(timeStamp));
-  #ifdef DEBUG_PRINT
+  #ifdef PRINT_DEBUG
   Serial.print(micros());
   Serial.print(" To ");
   Serial.print(hub_addr[0], HEX);
@@ -287,14 +281,14 @@ void SendHeartBeat()
   Serial.print(timeStamp.packet.msgType);
   Serial.print(" Time ");
   Serial.print(timeStamp.packet.timeStamp);
-  Serial.print(" bytes ");
-  Serial.print(timeStamp.dataBytes[0], HEX);
-  for(int idx = 1; idx < 5; idx++)
+  Serial.print(" To ");
+  Serial.print(hub_addr[0], HEX);
+  for(int idx = 1; idx < 6; idx++)
   {
-    Serial.print(" ");
-    Serial.print(timeStamp.dataBytes[idx], HEX);
+    Serial.print(":");
+    Serial.print(hub_addr[idx], HEX);
   }
-  Serial.print("\n");
+  Serial.println();
   #endif
 }
 //
@@ -303,11 +297,10 @@ void SendHeartBeat()
 void requestTimestamp()
 {
   timeStamp.packet.msgType[0] = 'T';
-  timeStamp.packet.timeStamp = micros();
-  lastTimestampRequest = micros();
+  timeStamp.packet.timeStamp = micros() - timestampAdjust;
   uint8_t result = esp_now_send(hub_addr, &timeStamp.dataBytes[0], sizeof(timeStamp));
-  #ifdef DEBUG_PRINT
-  Serial.print(micros());
+  #ifdef PRINT_DEBUG
+  Serial.print(timeStamp.packet.timeStamp);
   Serial.print("To ");
   Serial.print(hub_addr[0], HEX);
   for(int idx = 1; idx < 6; idx++)
@@ -330,13 +323,13 @@ void InitESPNow() {
   WiFi.disconnect();
   if (esp_now_init() == 0) 
   {
-    #ifdef DEBUG_PRINT
+    #ifdef PRINT_DEBUG
     Serial.println("ESPNow Init Success");
     #endif
   }
   else 
 {
-    #ifdef DEBUG_PRINT
+    #ifdef PRINT_DEBUG
     Serial.println("ESPNow Init Failed");
     #endif
     // restart
@@ -344,56 +337,13 @@ void InitESPNow() {
   }
 }
 //
-//
-//
-void ConnectToGPS()
-{
-  btConnected = SerialBT.connect(btName);
-  
-  if(btConnected) 
-  {
-    #ifdef DEBUG_PRINT
-    Serial.println("Connected Succesfully!");
-    #endif
-  }
-  else 
-  {
-    while(!SerialBT.connected(10000)) 
-    {
-      #ifdef DEBUG_PRINT
-      Serial.println("Failed to connect. Make sure remote device is available and in range, then restart app."); 
-      #endif
-    }
-  }
-  // disconnect() may take upto 10 secs max
-  if (SerialBT.disconnect()) 
-  {
-    #ifdef DEBUG_PRINT
-    Serial.println("Disconnected Succesfully!");
-    #endif
-  }
-  // this would reconnect to the name(will use address, if resolved) or address used with connect(name/address).
-  SerialBT.connect();
-}
-//
 // callback when data is sent
 //
 void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) 
 {
-  // first good send request timestamp adjustment
-  if((status == 0) && 
-     (timestampAdjust == 0) &&
-     (micros() - lastTimestampRequest > TIMESTAMP_REQUEST_INTERVAL))
+if(status != 0)
   {
-    #ifdef DEBUG_PRINT
-    Serial.println("Request timestamp from hub on first succesful send - OnDataSent");
-    #endif
-    requestTimestamp();
-  }
-  else if(status != 0)
-  {
-    timestampAdjust = 0;
-    #ifdef DEBUG_PRINT
+    #ifdef PRINT_DEBUG
     char macStr[18];
     Serial.print("Last Packet Sent to: ");
     for(int idx = 0; idx < 6; idx++)
@@ -414,8 +364,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
   {
     memcpy(&timeStamp, data, sizeof(timeStamp));
     timestampAdjust =  micros() - timeStamp.packet.timeStamp;
-    #ifdef DEBUG_PRINT
-    Serial.print("Recv ");Serial.print(data_len);Serial.print(" bytes from: ");
+    #ifdef PRINT_DEBUG
     Serial.print(mac_addr[0], HEX);
     for(int idx = 1; idx < 6; idx++)
     {
@@ -428,7 +377,7 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
     Serial.print(" HUB timestamp ");
     Serial.print (timeStamp.packet.timeStamp);
     Serial.print(" adjustment ");
-    Serial.print (timestampAdjust);
+    Serial.print ((long)timestampAdjust);
     Serial.print(" corrected ");
     Serial.println(localTs - timestampAdjust);
     #endif
@@ -436,10 +385,48 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
   // change state of logging
   else if(data[0] == 'B')
   {
-    startLogging = true;
+    #ifdef PRINT_DEBUG
+    Serial.println("START Logging");
+    #endif
+    isLogging = true;
   }
   else if(data[0] == 'E')
   {
-    startLogging = false;
+    #ifdef PRINT_DEBUG
+    Serial.println("END Logging");
+    #endif
+    isLogging = false;
   }
+}
+//
+//
+//
+void ConnectToGPS()
+{
+  btConnected = SerialBT.connect(btName);
+  
+  if(btConnected) 
+  {
+    #ifdef PRINT_DEBUG
+    Serial.println("Connected Succesfully!");
+    #endif
+  }
+  else 
+  {
+    while(!SerialBT.connected(10000)) 
+    {
+      #ifdef PRINT_DEBUG
+      Serial.println("Failed to connect. Make sure remote device is available and in range, then restart app."); 
+      #endif
+    }
+  }
+  // disconnect() may take upto 10 secs max
+  if (SerialBT.disconnect()) 
+  {
+    #ifdef PRINT_DEBUG
+    Serial.println("Disconnected Succesfully!");
+    #endif
+  }
+  // this would reconnect to the name(will use address, if resolved) or address used with connect(name/address).
+  SerialBT.connect();
 }
