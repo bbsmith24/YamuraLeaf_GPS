@@ -1,3 +1,4 @@
+
 /*
    Yamura Leaf - bluetooth GPS for Dual XGPS160
    BBS 3/2021
@@ -15,6 +16,7 @@
 #include <WiFi.h>
 #include "BluetoothSerial.h"
 #include "DataStructures.h"
+#include <TinyGPS++.h>
 // timestamp (H and T types)
 TimeStampPacket timeStamp;
 // digital/A2D data (I type)
@@ -31,13 +33,17 @@ bool isLogging = false;
 unsigned long sentCount = 0;
 unsigned long errorCount = 0;
 // hub MAC addres
-uint8_t hub_addr[] = { 0x7C, 0x9E, 0xBD, 0xF6, 0x45, 0x80};
+uint8_t hub_addr[] = { 0x7C, 0x9E, 0xBD, 0x30, 0x54, 0xCC};
 esp_now_peer_info *hub;
 
 BluetoothSerial SerialBT;
 String btName = "XGPS160-45E134";
 char *btPin = "1234"; //<- standard pin would be provided by default
 bool btConnected;
+TinyGPSPlus gpsParser;
+int gpsHour;
+int gpsMinute;
+float gpsSecond;
 
 #define ESP8266_LED 5
 //
@@ -53,8 +59,7 @@ void setup()
   WiFi.mode(WIFI_STA);
   // This is the mac address of this device
   Serial.println();
-  Serial.print("YamuraLeaf GPS at ");
-  Serial.print("MAC: "); Serial.println(WiFi.macAddress());
+  Serial.print("YamuraLeaf GPS ");Serial.println(WiFi.macAddress());
   // Init ESPNow with a fallback logic
   InitESPNow();
   // Once ESPNow is successfully Init, we will register for Send CB to
@@ -80,8 +85,7 @@ void setup()
   lastSampleTime = micros();
   currentSampleTime = micros();
   // leaf type
-  gpsPacket.packet.leafType[0] = 'G';
-
+  gpsPacket.packet.leafType = GPS_LEAFTYPE;
 
   #ifdef PRINT_DEBUG
   Serial.println("Begin bluetooth initialization");
@@ -90,7 +94,7 @@ void setup()
   // Set CoreDebugLevel to Info to view devices bluetooth address and device names
   Serial.print("Attempt to connect to "); Serial.println(btName);
   #endif
-  SerialBT.begin("ESP32test", true); 
+  SerialBT.begin("GPSLeaf", true); 
   ConnectToGPS();
   digitalWrite(ESP8266_LED, LOW); // built in LED
   #ifdef PRINT_DEBUG
@@ -126,70 +130,50 @@ void loop()
       while (SerialBT.available()) 
       {
         inByte = SerialBT.read();
+        //Serial.print((char)inByte);
         if(inByte == 10)
         {
+          //Serial.println();
           break;
         }
+        gpsParser.encode(inByte);
         gpsRecieved[charIdx]=(char)inByte;
         charIdx++;
       }
-      // here are the interesting messages
-      // $GPRMC - 11 fields
-      //                     A=valid    latitude                longitude
-      //         hhmmss.sss  V=invalid  ddmm.mmmm               dddmm.mmmm      Speed Course  ddmmyy M  CS
-      // $GPRMC, 161229.487, A,         3723.2475,  N,          12158.3416, W,  0.13, 309.62, 120598, , *10
-      // token 1 = type (GPRMC)
-      // token 2 = nmea time
-      // token 4 = latitude
-      // token 6 = longitude
-      char *token = NULL;
-      char buf[256];
-      // get the first token - message type. accept only GPRMC messages
-      token = strtok(gpsRecieved,",");
-      int tokenCount = 0;
-      if(strcmp(token,"$GPRMC") != 0)
+      // invalid time or position
+      if((!gpsParser.time.isValid()) ||
+         (!gpsParser.location.isValid()) ||
+         (!gpsParser.location.isUpdated()))
       {
         return;
       }
-      gpsPacket.packet.timeStamp = currentSampleTime - timestampAdjust;
-      while(token != NULL)
-      {
-        tokenCount++;
-        switch(tokenCount)
-        {
-          case 2:   // nmea time
-            // must be 10 characters in format hhmmss.sss
-            if(strlen(token) != 10)
-            {
-              return;
-            }
-            strcpy(gpsPacket.packet.nmeaTime, token);
-            break;
-          case 4:   // nmea latitude in format ddmm.mmmmm
-            if(strlen(token) != 10)
-            {
-              return;
-            }
-            strcpy(gpsPacket.packet.gpsLatitude, token);
-            break;
-          case 6:   // nmea longitude in format dddmm.mmmmm
-            if(strlen(token) != 11)
-            {
-              return;
-            }
-            strcpy(gpsPacket.packet.gpsLongitude, token);
-            break;
-          default:  // ignore all others
-            break;
-        }
-        token = strtok(NULL,",");
-      }
-      // bad data packet
-      if((tokenCount != 11) ||
-         (strcmp(gpsPacket.packet.nmeaTime, "000000.000") == 0))
+      uint8_t curHour = gpsParser.time.hour();
+      uint8_t curMinute = gpsParser.time.minute();
+      double curSecond = (double)gpsParser.time.second() + (double)gpsParser.time.centisecond()/100.0;
+      // duplicate timestamp
+      if((gpsHour == curHour) &&
+         (gpsMinute == curMinute) &&
+         (gpsSecond == curSecond))
       {
         return;
       }
+      //
+      gpsPacket.packet.timeStamp = lastSampleTime;
+      gpsPacket.packet.gpsDay = gpsParser.date.day();
+      gpsPacket.packet.gpsMonth = gpsParser.date.month();
+      gpsPacket.packet.gpsHour = curHour;
+      gpsPacket.packet.gpsMinute = curMinute;
+      gpsPacket.packet.gpsSecond = gpsParser.time.second();
+      gpsPacket.packet.gpsCentisecond = gpsParser.time.centisecond();
+      gpsPacket.packet.gpsLatitude = gpsParser.location.lat();
+      gpsPacket.packet.gpsLongitude = gpsParser.location.lng();
+      gpsPacket.packet.gpsSpeed = gpsParser.speed.mph();
+      gpsPacket.packet.gpsCourse = gpsParser.course.deg();
+      gpsPacket.packet.gpsSIV = (uint8_t)gpsParser.satellites.value();
+      // update last gps time sent
+      gpsHour = curHour;
+      gpsMinute = curMinute;
+      gpsSecond = curSecond;
       sendData();
     }
     // is connection still alive? if not retry
@@ -237,8 +221,9 @@ void sendData()
   Serial.print(gpsPacket.packet.leafType);
   Serial.print(" Time ");
   Serial.print(gpsPacket.packet.timeStamp);
-  Serial.print(" Values GPS nmeaTime ");
-  Serial.print(gpsPacket.packet.nmeaTime); Serial.print(" LAT ");
+  Serial.print(" GPS Time ");
+  Serial.print(gpsPacket.packet.gpsHour); Serial.print(":");Serial.print(gpsPacket.packet.gpsMinute); Serial.print(":");Serial.print(gpsPacket.packet.gpsSecond);Serial.print(".");Serial.print(gpsPacket.packet.gpsCentisecond);
+  Serial.print(" LAT ");
   Serial.print(gpsPacket.packet.gpsLatitude); Serial.print(" LONG ");
   Serial.println(gpsPacket.packet.gpsLongitude);
   #endif
@@ -265,7 +250,7 @@ void SendHeartBeat()
     #endif
     esp_now_add_peer((const esp_now_peer_info_t*)hub);
   }
-  timeStamp.packet.msgType[0] = 'H';
+  timeStamp.packet.msgType = HEARTBEAT_TYPE;
   timeStamp.packet.timeStamp = micros() - timestampAdjust;
   uint8_t result = esp_now_send(hub_addr, &timeStamp.dataBytes[0], sizeof(timeStamp));
   #ifdef PRINT_DEBUG
@@ -296,7 +281,7 @@ void SendHeartBeat()
 //
 void requestTimestamp()
 {
-  timeStamp.packet.msgType[0] = 'T';
+  timeStamp.packet.msgType = TIMESTAMP_TYPE;
   timeStamp.packet.timeStamp = micros() - timestampAdjust;
   uint8_t result = esp_now_send(hub_addr, &timeStamp.dataBytes[0], sizeof(timeStamp));
   #ifdef PRINT_DEBUG
@@ -360,7 +345,7 @@ if(status != 0)
 //
 void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
 {
-  if(data[0] == 'T')
+  if(data[0] == TIMESTAMP_TYPE)
   {
     memcpy(&timeStamp, data, sizeof(timeStamp));
     timestampAdjust =  micros() - timeStamp.packet.timeStamp;
@@ -383,14 +368,14 @@ void OnDataRecv(const uint8_t *mac_addr, const uint8_t *data, int data_len)
     #endif
   }
   // change state of logging
-  else if(data[0] == 'B')
+  else if(data[0] == LOGGING_BEGIN)
   {
     #ifdef PRINT_DEBUG
     Serial.println("START Logging");
     #endif
     isLogging = true;
   }
-  else if(data[0] == 'E')
+  else if(data[0] == LOGGING_END)
   {
     #ifdef PRINT_DEBUG
     Serial.println("END Logging");
