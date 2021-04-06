@@ -56,7 +56,7 @@ struct CombinedIOLeaf
 {
   char leafType           __attribute__((__packed__));    // 1 byte,  type, in this case 'C' for combined IO
   unsigned long timeStamp __attribute__((__packed__));    // 4 bytes, millis() value of sample
-  int16_t a2dValues[4]    __attribute__((__packed__));    // 8 bytes, 2 per a2d channel
+  int16_t a2dValues[4]    __attribute__((__packed__));    // 8 bytes, 2 bytes per a2d channel
   int16_t digitalValue    __attribute__((__packed__));    // 2 byte,  1 bit per digital channel
   //                                                        15 bytes total 
 };
