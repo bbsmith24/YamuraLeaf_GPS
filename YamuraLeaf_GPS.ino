@@ -245,7 +245,7 @@ void loop()
     gpsSecond = curSecond;
     gpsCentiSecond = curCentiSecond;
     #ifdef PRINT_DEBUG
-    PrintGPS(gpsInfo);
+    //PrintGPS(gpsInfo);
     #endif
     if(isLogging)
     {
