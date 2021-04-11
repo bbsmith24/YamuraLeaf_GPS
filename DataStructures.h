@@ -34,6 +34,17 @@ union TimeStampPacket
   TimeStamp packet;
   uint8_t dataBytes[TIMEPACKET_SIZE];
 };
+void PrintTimestamp(unsigned long local, TimeStampPacket info)
+{
+  #ifdef PRINT_DEBUG
+  Serial.print("Type\t");
+  Serial.println(info.packet.msgType);
+  Serial.print("Local\t");
+  Serial.print(local);
+  Serial.print("Timestamp\t");
+  Serial.print(info.packet.timeStamp);
+  #endif
+}
 //
 #define IMU_LEAFTYPE 'I'
 #define IMUPACKET_SIZE 17
@@ -49,6 +60,25 @@ union IMUPacket
 	IMULeaf packet;
 	uint8_t dataBytes[IMUPACKET_SIZE];
 };
+void PrintIMU(IMUPacket info)
+{
+  #ifdef PRINT_DEBUG
+  Serial.print("Timestamp\t");
+  Serial.print(info.packet.timeStamp);
+  Serial.print("\tACCEL X\t");
+  Serial.print(info.packet.values[0]);
+  Serial.print("\tY\t");
+  Serial.print(info.packet.values[1]);
+  Serial.print("\tZ\t");
+  Serial.print(info.packet.values[2]);
+  Serial.print("\tGYRO X\t");
+  Serial.print(info.packet.values[3]);
+  Serial.print("\tY\t");
+  Serial.print(info.packet.values[4]);
+  Serial.print("\tZ\t");
+  Serial.println(info.packet.values[5]);
+  #endif
+}
 //
 #define COMBINEDIO_LEAFTYPE 'C'
 #define COMBINEDIOPACKET_SIZE 15
@@ -65,6 +95,21 @@ union CombinedIOPacket
 	CombinedIOLeaf packet;
 	uint8_t dataBytes[COMBINEDIOPACKET_SIZE];
 };
+void PrintCombined(CombinedIOPacket info)
+{
+  #ifdef PRINT_DEBUG
+  Serial.print("Timestamp\t");
+  Serial.print(info.packet.timeStamp);
+  for(int idx = 0; idx < 4; idx++)
+  {
+    Serial.print("\tA");
+    Serial.print(idx);
+    Serial.print("\t");
+    Serial.print(info.packet.a2dValues[idx]);
+  }
+  Serial.println(info.packet.digitalValue, HEX);
+  #endif
+}
 #define DIGITAL_LEAFTYPE 'D'
 #define DIGITALPACKET_SIZE 7
 struct DigitalLeaf
@@ -79,6 +124,15 @@ union DigitalPacket
   DigitalLeaf packet;
   uint8_t dataBytes[DIGITALPACKET_SIZE];
 };
+void PrintDigital(DigitalPacket info)
+{
+  #ifdef PRINT_DEBUG
+  Serial.print("Timestamp\t");
+  Serial.print(info.packet.timeStamp);
+  Serial.println(info.packet.digitalValue, HEX);
+  #endif
+}
+
 #define ANALOG_LEAFTYPE 'A'
 #define ANALOGPACKET_SIZE 13
 struct AnalogLeaf
@@ -93,6 +147,24 @@ union AnalogPacket
   AnalogLeaf packet;
   uint8_t dataBytes[ANALOGPACKET_SIZE];
 };
+//
+//
+//
+void PrintAnalog(AnalogPacket info)
+{
+  #ifdef PRINT_DEBUG
+  Serial.print("Timestamp\t");
+  Serial.print(info.packet.timeStamp);
+  for(int idx = 0; idx < 4; idx++)
+  {
+    Serial.print("\tA");
+    Serial.print(idx);
+    Serial.print("\t");
+    Serial.print(info.packet.a2dValues[idx]);
+  }
+  Serial.println();
+  #endif
+}
 #define GPS_LEAFTYPE 'G'
 #define GPSPACKET_SIZE 44
 struct GPSLeaf
@@ -117,3 +189,35 @@ union GPSPacket
   GPSLeaf packet;
   uint8_t dataBytes[GPSPACKET_SIZE];
 };
+//
+//
+//
+void PrintGPS(GPSPacket info)
+{
+  #ifdef PRINT_DEBUG
+  Serial.print("Timestamp\t");
+  Serial.print(info.packet.timeStamp);
+  Serial.print("\tGPS time\t");
+  Serial.print(info.packet.gpsHour);
+  Serial.print(":");
+  Serial.print(info.packet.gpsMinute);
+  Serial.print(":");
+  Serial.print(info.packet.gpsSecond);
+  Serial.print(".");
+  Serial.print(info.packet.gpsCentisecond);
+  Serial.print("\tDate\t");
+  Serial.print(info.packet.gpsMonth);
+  Serial.print("/");
+  Serial.print(info.packet.gpsDay);
+  Serial.print("\tLAT\t");
+  Serial.print(info.packet.gpsLatitude);
+  Serial.print("\tLONG\t");
+  Serial.print(info.packet.gpsLongitude);
+  Serial.print("\tMPH\t");
+  Serial.print(info.packet.gpsSpeed);
+  Serial.print("\tCourse\t");
+  Serial.print(info.packet.gpsCourse);
+  Serial.print("\tSIV\t");
+  Serial.println(info.packet.gpsSIV);
+  #endif
+}
