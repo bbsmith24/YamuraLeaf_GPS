@@ -38,11 +38,11 @@ void PrintTimestamp(unsigned long local, TimeStampPacket info)
 {
   #ifdef PRINT_DEBUG
   Serial.print("Type\t");
-  Serial.println(info.packet.msgType);
-  Serial.print("Local\t");
+  Serial.print(info.packet.msgType);
+  Serial.print("\tLocal\t");
   Serial.print(local);
-  Serial.print("Timestamp\t");
-  Serial.print(info.packet.timeStamp);
+  Serial.print("\tTimestamp\t");
+  Serial.println(info.packet.timeStamp);
   #endif
 }
 //
