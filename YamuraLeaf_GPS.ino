@@ -61,6 +61,7 @@ xQueueHandle  timeStampReceiveQueue;
 TaskHandle_t gpsSendTask;
 TaskHandle_t timeStampSendTask;
 TaskHandle_t timeStampReceiveTask;
+uint8_t localAddr[6];
 void setup()
 {
   Serial.begin(115200);
@@ -72,6 +73,7 @@ void setup()
   // This is the mac address of this device
   Serial.println();
   Serial.print("YamuraLeaf GPS ");Serial.println(WiFi.macAddress());
+  WiFi.macAddress(localAddr);
   // Init ESPNow with a fallback logic
   InitESPNow();
 
@@ -228,6 +230,7 @@ void loop()
     GPSPacket gpsInfo;
     gpsInfo.packet.leafType = GPS_LEAFTYPE;
     gpsInfo.packet.timeStamp = lastSampleTime;
+    memcpy(&gpsInfo.packet.macAddr, localAddr, 6);
     gpsInfo.packet.gpsDay = gpsParser.date.day();
     gpsInfo.packet.gpsMonth = gpsParser.date.month();
     gpsInfo.packet.gpsHour = curHour;
@@ -277,6 +280,7 @@ void loop()
       TimeStampPacket timeStampHeartbeat;
       timeStampHeartbeat.packet.msgType = HEARTBEAT_TYPE;
       timeStampHeartbeat.packet.timeStamp = micros() - timestampAdjust;
+      memcpy(&timeStampHeartbeat.packet.macAddr, localAddr, 6);
       xQueueSendToBack( timeStampSendQueue, &timeStampHeartbeat,0);// portMAX_DELAY );
       Serial.println(uxQueueMessagesWaiting(timeStampSendQueue));
       lastHeartbeatTime = micros();

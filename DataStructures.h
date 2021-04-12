@@ -22,11 +22,12 @@
 #define LOGGING_END 'E'
 #define TIMESTAMP_TYPE 'T'
 #define HEARTBEAT_TYPE 'H'
-#define TIMEPACKET_SIZE 5
+#define TIMEPACKET_SIZE 11
 struct TimeStamp
 {
   char msgType            __attribute__((__packed__));    // 1 bytes  - type, in this case 'T' for timestamp request, 'H' for heartbeat, 'B' to start logging, 'E' to end logging
   unsigned long timeStamp __attribute__((__packed__));    // 4 bytes - millis() value of sample
+  uint8_t macAddr[6];  
   //                                                         5 bytes total 
 };
 union TimeStampPacket
@@ -42,16 +43,25 @@ void PrintTimestamp(unsigned long local, TimeStampPacket info)
   Serial.print("\tLocal\t");
   Serial.print(local);
   Serial.print("\tTimestamp\t");
-  Serial.println(info.packet.timeStamp);
+  Serial.print(info.packet.timeStamp);
+  Serial.print(" MAC ");
+  Serial.print(info.packet.macAddr[0], HEX);
+  for(int macIdx = 1; macIdx < 6; macIdx++)
+  {
+    Serial.print(":");
+    Serial.print(info.packet.macAddr[macIdx], HEX);
+  }
+  Serial.println();
   #endif
 }
 //
 #define IMU_LEAFTYPE 'I'
-#define IMUPACKET_SIZE 17
+#define IMUPACKET_SIZE 23
 struct IMULeaf
 {
   char leafType           __attribute__((__packed__));   //  1 byte  - type, in this case 'I' for IMU
   unsigned long timeStamp __attribute__((__packed__));   //  4 bytes - millis() value of sample
+  uint8_t macAddr[6];  
   int16_t values[6]       __attribute__((__packed__));   // 12 bytes - X,Y,Z acceleration values and i, j, k rotation values
   //                                                        17 bytes total 
 };
@@ -65,6 +75,13 @@ void PrintIMU(IMUPacket info)
   #ifdef PRINT_DEBUG
   Serial.print("Timestamp\t");
   Serial.print(info.packet.timeStamp);
+  Serial.print(" MAC ");
+  Serial.print(info.packet.macAddr[0], HEX);
+  for(int macIdx = 1; macIdx < 6; macIdx++)
+  {
+    Serial.print(":");
+    Serial.print(info.packet.macAddr[macIdx], HEX);
+  }
   Serial.print("\tACCEL X\t");
   Serial.print(info.packet.values[0]);
   Serial.print("\tY\t");
@@ -81,14 +98,14 @@ void PrintIMU(IMUPacket info)
 }
 //
 #define COMBINEDIO_LEAFTYPE 'C'
-#define COMBINEDIOPACKET_SIZE 15
+#define COMBINEDIOPACKET_SIZE 21
 struct CombinedIOLeaf
 {
   char leafType           __attribute__((__packed__));    // 1 byte,  type, in this case 'C' for combined IO
   unsigned long timeStamp __attribute__((__packed__));    // 4 bytes, millis() value of sample
+  uint8_t macAddr[6];  
   int16_t a2dValues[4]    __attribute__((__packed__));    // 8 bytes, 2 bytes per a2d channel
   int16_t digitalValue    __attribute__((__packed__));    // 2 byte,  1 bit per digital channel
-  //                                                        15 bytes total 
 };
 union CombinedIOPacket
 {
@@ -100,6 +117,13 @@ void PrintCombined(CombinedIOPacket info)
   #ifdef PRINT_DEBUG
   Serial.print("Timestamp\t");
   Serial.print(info.packet.timeStamp);
+  Serial.print(" MAC ");
+  Serial.print(info.packet.macAddr[0], HEX);
+  for(int macIdx = 1; macIdx < 6; macIdx++)
+  {
+    Serial.print(":");
+    Serial.print(info.packet.macAddr[macIdx], HEX);
+  }
   for(int idx = 0; idx < 4; idx++)
   {
     Serial.print("\tA");
@@ -111,11 +135,12 @@ void PrintCombined(CombinedIOPacket info)
   #endif
 }
 #define DIGITAL_LEAFTYPE 'D'
-#define DIGITALPACKET_SIZE 7
+#define DIGITALPACKET_SIZE 13
 struct DigitalLeaf
 {
   char leafType           __attribute__((__packed__));    // 1 byte,  type, in this case 'D' for digital (on/off) channels
   unsigned long timeStamp __attribute__((__packed__));    // 4 bytes, millis() value of sample
+  uint8_t macAddr[6];  
   int16_t digitalValue    __attribute__((__packed__));    // 2 byte,  1 bit per digital channel
   //                                                         7 bytes total 
 };
@@ -129,18 +154,25 @@ void PrintDigital(DigitalPacket info)
   #ifdef PRINT_DEBUG
   Serial.print("Timestamp\t");
   Serial.print(info.packet.timeStamp);
+  Serial.print(" MAC ");
+  Serial.print(info.packet.macAddr[0], HEX);
+  for(int macIdx = 1; macIdx < 6; macIdx++)
+  {
+    Serial.print(":");
+    Serial.print(info.packet.macAddr[macIdx], HEX);
+  }
   Serial.println(info.packet.digitalValue, HEX);
   #endif
 }
 
 #define ANALOG_LEAFTYPE 'A'
-#define ANALOGPACKET_SIZE 13
+#define ANALOGPACKET_SIZE 19
 struct AnalogLeaf
 {
   char leafType           __attribute__((__packed__));    // 1 byte,  type, in this case 'D' for digital (on/off) channels
   unsigned long timeStamp __attribute__((__packed__));    // 4 bytes, millis() value of sample
+  uint8_t macAddr[6];  
   int16_t a2dValues[4]    __attribute__((__packed__));    // 8 bytes, 2 per a2d channel
-  //                                                        13 bytes total 
 };
 union AnalogPacket
 {
@@ -155,6 +187,13 @@ void PrintAnalog(AnalogPacket info)
   #ifdef PRINT_DEBUG
   Serial.print("Timestamp\t");
   Serial.print(info.packet.timeStamp);
+  Serial.print(" MAC ");
+  Serial.print(info.packet.macAddr[0], HEX);
+  for(int macIdx = 1; macIdx < 6; macIdx++)
+  {
+    Serial.print(":");
+    Serial.print(info.packet.macAddr[macIdx], HEX);
+  }
   for(int idx = 0; idx < 4; idx++)
   {
     Serial.print("\tA");
@@ -166,11 +205,12 @@ void PrintAnalog(AnalogPacket info)
   #endif
 }
 #define GPS_LEAFTYPE 'G'
-#define GPSPACKET_SIZE 44
+#define GPSPACKET_SIZE 50
 struct GPSLeaf
 {
   char leafType           __attribute__((__packed__));    // 1 byte  - type, in this case 'G' for GPS
   unsigned long timeStamp __attribute__((__packed__));    // 4 bytes - micros() value of sample
+  uint8_t macAddr[6];  
   uint8_t gpsDay          __attribute__((__packed__));    // 1 byte of GPS day
   uint8_t gpsMonth        __attribute__((__packed__));    // 1 byte of GPS month
   uint8_t gpsHour         __attribute__((__packed__));    // 1 byte of GPS hour
@@ -197,6 +237,13 @@ void PrintGPS(GPSPacket info)
   #ifdef PRINT_DEBUG
   Serial.print("Timestamp\t");
   Serial.print(info.packet.timeStamp);
+  Serial.print(" MAC ");
+  Serial.print(info.packet.macAddr[0], HEX);
+  for(int macIdx = 1; macIdx < 6; macIdx++)
+  {
+    Serial.print(":");
+    Serial.print(info.packet.macAddr[macIdx], HEX);
+  }
   Serial.print("\tGPS time\t");
   Serial.print(info.packet.gpsHour);
   Serial.print(":");
